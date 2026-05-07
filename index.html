@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>LogiScan AR · Colima</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap');
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#050a12;--surface:rgba(8,18,32,.85);--surface2:rgba(12,24,44,.9);
+  --accent:#00ffe5;--accent2:#0066ff;--accent3:#ff3c6e;--warn:#ffb800;--ok:#00e57a;
+  --text:#e8f4ff;--text2:#7a9bb5;--border:rgba(0,200,255,.18);
+  --hud:rgba(0,220,255,.08);--hud-border:rgba(0,220,255,.25);
+  --font:'Exo 2',sans-serif;--mono:'Share Tech Mono',monospace;--display:'Rajdhani',sans-serif;
+  --r:12px;
+}
+
+html,body{height:100%;overflow:hidden;background:#000;font-family:var(--font)}
+
+/* ── FULLSCREEN CAMERA ── */
+#camera-container{
+  position:fixed;inset:0;z-index:0;overflow:hidden;background:#000;
+}
+#video{
+  position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  transform:scaleX(1);
+}
+#scan-canvas{position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none}
+
+/* ── HUD OVERLAY (always on top of camera) ── */
+#hud{
+  position:fixed;inset:0;z-index:10;pointer-events:none;
+  display:flex;flex-direction:column;
+}
+
+/* ── TOP BAR ── */
+.hud-top{
+  pointer-events:all;
+  background:linear-gradient(180deg,rgba(0,5,15,.92) 60%,transparent);
+  padding:env(safe-area-inset-top,12px) 16px 20px;
+  display:flex;align-items:center;gap:12px;
+}
+.app-logo{display:flex;align-items:center;gap:10px;flex:1}
+.logo-mark{
+  width:38px;height:38px;
+  border:1.5px solid var(--accent);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(0,255,229,.08);
+  position:relative;overflow:hidden;
+}
+.logo-mark::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,transparent 40%,rgba(0,255,229,.15));
+}
+.logo-mark svg{width:22px;height:22px;fill:var(--accent)}
+.app-title{font-family:var(--display);font-size:18px;font-weight:700;color:var(--text);letter-spacing:.5px;line-height:1}
+.app-sub{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1.5px;margin-top:2px}
+.hud-status{
+  font-family:var(--mono);font-size:10px;color:var(--accent);
+  border:1px solid var(--hud-border);border-radius:20px;
+  padding:4px 10px;background:var(--hud);
+  display:flex;align-items:center;gap:5px;
+}
+.pulse-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);animation:blink 1.2s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1;box-shadow:0 0 6px var(--accent)}50%{opacity:.3;box-shadow:none}}
+
+/* ── SCANNER RETICLE ── */
+.hud-mid{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+.reticle{
+  width:220px;height:220px;position:relative;
+  transition:all .3s ease;
+}
+.reticle.found{transform:scale(1.05)}
+.corner-piece{
+  position:absolute;width:32px;height:32px;
+  border-color:var(--accent);border-style:solid;
+  filter:drop-shadow(0 0 6px var(--accent));
+}
+.corner-piece.tl{top:0;left:0;border-width:3px 0 0 3px;border-radius:6px 0 0 0}
+.corner-piece.tr{top:0;right:0;border-width:3px 3px 0 0;border-radius:0 6px 0 0}
+.corner-piece.bl{bottom:0;left:0;border-width:0 0 3px 3px;border-radius:0 0 0 6px}
+.corner-piece.br{bottom:0;right:0;border-width:0 3px 3px 0;border-radius:0 0 6px 0}
+.scan-beam{
+  position:absolute;left:10px;right:10px;height:2px;top:10px;
+  background:linear-gradient(90deg,transparent,var(--accent),var(--accent),transparent);
+  box-shadow:0 0 10px var(--accent),0 0 20px rgba(0,255,229,.4);
+  animation:beam 2.5s ease-in-out infinite;
+  border-radius:2px;
+}
+@keyframes beam{0%{top:10px;opacity:0}8%{opacity:1}92%{opacity:1}100%{top:210px;opacity:0}}
+.scan-hint{
+  position:absolute;bottom:-36px;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:11px;color:rgba(0,255,229,.7);
+  white-space:nowrap;letter-spacing:1px;
+  text-shadow:0 0 10px var(--accent);
+}
+.reticle-grid{
+  position:absolute;inset:12px;
+  background-image:
+    linear-gradient(rgba(0,255,229,.04) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(0,255,229,.04) 1px,transparent 1px);
+  background-size:22px 22px;
+}
+
+/* ── AR INFO BUBBLE (superimposed on QR) ── */
+#ar-bubble{
+  position:fixed;z-index:50;
+  pointer-events:all;
+  transform-origin:top left;
+  transition:opacity .25s,transform .25s;
+  opacity:0;pointer-events:none;
+}
+#ar-bubble.visible{opacity:1;pointer-events:all}
+.ar-card{
+  background:rgba(2,12,28,.92);
+  border:1px solid var(--accent);
+  border-radius:14px;
+  padding:14px 16px;
+  min-width:220px;max-width:280px;
+  box-shadow:0 0 30px rgba(0,255,229,.25),inset 0 0 20px rgba(0,200,255,.04);
+  backdrop-filter:blur(12px);
+  position:relative;overflow:hidden;
+}
+.ar-card::before{
+  content:'';position:absolute;top:0;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+}
+.ar-card-header{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+.ar-pkg-emoji{font-size:26px;line-height:1}
+.ar-pkg-id{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:1px}
+.ar-pkg-name{font-family:var(--display);font-size:15px;font-weight:700;color:var(--text);line-height:1.2}
+.ar-close{
+  margin-left:auto;width:26px;height:26px;border-radius:50%;
+  background:rgba(255,60,110,.15);border:1px solid rgba(255,60,110,.4);
+  display:flex;align-items:center;justify-content:center;
+  color:var(--accent3);font-size:13px;cursor:pointer;flex-shrink:0;
+  transition:all .2s;
+}
+.ar-close:hover{background:rgba(255,60,110,.3)}
+.ar-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.ar-field{background:rgba(0,40,80,.5);border:1px solid rgba(0,150,200,.2);border-radius:8px;padding:8px 10px}
+.ar-field-label{font-family:var(--mono);font-size:9px;color:var(--text2);letter-spacing:.8px;text-transform:uppercase;margin-bottom:3px}
+.ar-field-value{font-family:var(--display);font-size:14px;font-weight:600;color:var(--text)}
+.ar-field.full{grid-column:1/-1}
+.ar-priority{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 10px;border-radius:20px;font-family:var(--mono);font-size:10px;font-weight:600;
+}
+.pr-alta{background:rgba(255,60,60,.15);color:#ff6060;border:1px solid rgba(255,60,60,.35)}
+.pr-media{background:rgba(255,184,0,.12);color:var(--warn);border:1px solid rgba(255,184,0,.3)}
+.pr-baja{background:rgba(0,229,122,.12);color:var(--ok);border:1px solid rgba(0,229,122,.3)}
+.ar-status-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.ar-status{
+  font-family:var(--mono);font-size:10px;padding:3px 10px;border-radius:20px;
+}
+.st-transit{background:rgba(0,102,255,.15);color:#60a0ff;border:1px solid rgba(0,102,255,.3)}
+.st-pending{background:rgba(255,184,0,.12);color:var(--warn);border:1px solid rgba(255,184,0,.3)}
+.st-delivered{background:rgba(0,229,122,.12);color:var(--ok);border:1px solid rgba(0,229,122,.3)}
+.ar-actions{display:flex;gap:8px}
+.ar-btn{
+  flex:1;padding:9px 8px;border-radius:9px;border:none;cursor:pointer;
+  font-family:var(--display);font-size:13px;font-weight:600;letter-spacing:.3px;
+  transition:all .2s;display:flex;align-items:center;justify-content:center;gap:5px;
+}
+.ar-btn-primary{background:linear-gradient(135deg,var(--accent2),var(--accent));color:#000}
+.ar-btn-primary:active{opacity:.8}
+.ar-btn-secondary{background:rgba(0,255,229,.08);color:var(--accent);border:1px solid var(--hud-border)}
+.ar-btn-secondary:active{background:rgba(0,255,229,.15)}
+
+/* AR connector line */
+.ar-connector{
+  position:fixed;z-index:49;pointer-events:none;
+  width:2px;background:linear-gradient(180deg,var(--accent),transparent);
+  transform-origin:top center;
+  transition:opacity .25s;opacity:0;
+}
+.ar-connector.visible{opacity:.6}
+.ar-dot{
+  position:fixed;z-index:49;pointer-events:none;
+  width:10px;height:10px;border-radius:50%;
+  background:var(--accent);box-shadow:0 0 10px var(--accent);
+  transform:translate(-50%,-50%);
+  transition:opacity .25s;opacity:0;
+}
+.ar-dot.visible{opacity:1}
+
+/* ── BOTTOM NAV ── */
+.hud-bottom{
+  pointer-events:all;
+  background:linear-gradient(0deg,rgba(0,5,15,.95) 70%,transparent);
+  padding:0 0 env(safe-area-inset-bottom,12px);
+}
+.bottom-nav{
+  display:flex;align-items:center;padding:6px 12px 8px;gap:4px;
+}
+.nav-item{
+  flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:8px 4px;border-radius:12px;cursor:pointer;
+  color:var(--text2);transition:all .2s;border:1px solid transparent;
+  font-family:var(--display);font-size:10px;font-weight:600;letter-spacing:.5px;
+}
+.nav-item:hover,.nav-item.active{
+  color:var(--accent);border-color:var(--hud-border);background:var(--hud);
+}
+.nav-item svg{width:20px;height:20px;fill:currentColor;transition:all .2s}
+.nav-item.active svg{filter:drop-shadow(0 0 5px var(--accent))}
+
+/* ── PANELS (slide up over camera) ── */
+.panel{
+  position:fixed;inset:0;z-index:30;
+  display:flex;flex-direction:column;
+  background:rgba(3,8,20,.97);
+  transform:translateY(100%);
+  transition:transform .4s cubic-bezier(.16,1,.3,1);
+  pointer-events:none;
+}
+.panel.open{transform:translateY(0);pointer-events:all}
+.panel-drag{
+  width:40px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;
+  margin:12px auto 0;flex-shrink:0;
+}
+.panel-header{
+  padding:12px 16px 14px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+}
+.panel-title{font-family:var(--display);font-size:18px;font-weight:700;color:var(--text);flex:1}
+.panel-close{
+  width:32px;height:32px;border-radius:50%;
+  background:rgba(255,255,255,.06);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  color:var(--text2);font-size:15px;transition:all .2s;
+}
+.panel-close:hover{color:var(--accent);border-color:var(--accent)}
+.panel-body{flex:1;overflow-y:auto;padding:16px;-webkit-overflow-scrolling:touch}
+
+/* LIST */
+.pkg-list{display:flex;flex-direction:column;gap:10px}
+.pkg-card{
+  background:rgba(12,24,44,.8);border:1px solid var(--border);border-radius:var(--r);
+  padding:14px;cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:12px;
+  position:relative;overflow:hidden;
+}
+.pkg-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px}
+.pkg-card.alta::before{background:var(--accent3)}
+.pkg-card.media::before{background:var(--warn)}
+.pkg-card.baja::before{background:var(--ok)}
+.pkg-card:active{background:rgba(0,255,229,.06)}
+.pkg-icon-wrap{
+  width:46px;height:46px;border-radius:10px;
+  background:rgba(0,40,80,.6);border:1px solid var(--border);
+  display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;
+}
+.pkg-info{flex:1;min-width:0}
+.pkg-id{font-family:var(--mono);font-size:10px;color:var(--accent);letter-spacing:.8px;margin-bottom:2px}
+.pkg-name{font-family:var(--display);font-size:14px;font-weight:600;color:var(--text);margin-bottom:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pkg-addr{font-size:11px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:5px}
+.pkg-tags{display:flex;gap:5px;flex-wrap:wrap}
+
+/* BADGE */
+.badge{padding:2px 8px;border-radius:20px;font-family:var(--mono);font-size:10px;font-weight:600}
+.badge.alta{background:rgba(255,60,60,.12);color:#ff6060;border:1px solid rgba(255,60,60,.3)}
+.badge.media{background:rgba(255,184,0,.1);color:var(--warn);border:1px solid rgba(255,184,0,.25)}
+.badge.baja{background:rgba(0,229,122,.1);color:var(--ok);border:1px solid rgba(0,229,122,.25)}
+.badge.transit{background:rgba(0,102,255,.12);color:#60a0ff;border:1px solid rgba(0,102,255,.25)}
+.badge.pending{background:rgba(255,184,0,.1);color:var(--warn);border:1px solid rgba(255,184,0,.25)}
+.badge.delivered{background:rgba(0,229,122,.1);color:var(--ok);border:1px solid rgba(0,229,122,.25)}
+
+/* FILTER CHIPS */
+.filter-bar{display:flex;gap:7px;overflow-x:auto;padding:0 0 12px;flex-shrink:0}
+.filter-bar::-webkit-scrollbar{display:none}
+.chip{
+  padding:6px 14px;border-radius:20px;font-family:var(--mono);font-size:11px;
+  white-space:nowrap;border:1px solid var(--border);background:transparent;
+  color:var(--text2);cursor:pointer;transition:all .2s;
+}
+.chip.active{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+
+/* MAP */
+#map{width:100%;height:100%;min-height:1px}
+.map-legend{
+  position:absolute;top:12px;left:12px;z-index:400;
+  background:rgba(3,8,20,.9);border:1px solid var(--border);
+  border-radius:10px;padding:10px 12px;backdrop-filter:blur(8px);
+}
+.legend-row{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;color:var(--text2);margin-bottom:4px}
+.legend-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+
+/* ROUTE */
+.route-steps{display:flex;flex-direction:column}
+.route-step{
+  display:flex;align-items:flex-start;gap:10px;padding:10px 0;
+  position:relative;cursor:pointer;
+}
+.route-step:not(:last-child)::after{
+  content:'';position:absolute;left:14px;top:30px;
+  width:1px;height:calc(100% - 10px);background:var(--border);
+}
+.step-num{
+  width:28px;height:28px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;font-weight:700;
+  flex-shrink:0;z-index:1;
+  border:1px solid var(--accent);color:var(--accent);background:rgba(0,255,229,.07);
+}
+.step-info{flex:1}
+.step-name{font-family:var(--display);font-size:13px;font-weight:600;color:var(--text);
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px}
+.step-meta{font-family:var(--mono);font-size:10px;color:var(--text2);display:flex;gap:10px;flex-wrap:wrap}
+
+/* ROUTE STATS */
+.route-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px}
+.route-stat{background:rgba(12,24,44,.8);border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center}
+.route-stat-val{font-family:var(--display);font-size:22px;font-weight:700;color:var(--accent)}
+.route-stat-lbl{font-family:var(--mono);font-size:9px;color:var(--text2);letter-spacing:.5px;margin-top:2px}
+
+.opt-btn{
+  width:100%;padding:14px;border-radius:12px;border:none;
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  color:#000;font-family:var(--display);font-size:15px;font-weight:700;
+  cursor:pointer;margin-bottom:16px;letter-spacing:.5px;
+  transition:all .2s;
+}
+.opt-btn:active{opacity:.85;transform:scale(.98)}
+
+/* SCROLLBAR */
+::-webkit-scrollbar{width:3px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(0,255,229,.2);border-radius:3px}
+
+/* TOAST */
+.toast{
+  position:fixed;top:80px;left:50%;transform:translateX(-50%) translateY(-20px);
+  background:rgba(0,255,229,.12);border:1px solid var(--accent);border-radius:20px;
+  padding:9px 18px;font-family:var(--mono);font-size:12px;color:var(--accent);
+  z-index:200;opacity:0;transition:all .3s;pointer-events:none;white-space:nowrap;
+  backdrop-filter:blur(10px);letter-spacing:.5px;
+  box-shadow:0 0 20px rgba(0,255,229,.2);
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* PERMISSION SCREEN */
+#perm-screen{
+  position:fixed;inset:0;z-index:500;
+  background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:32px;text-align:center;
+}
+.perm-icon{font-size:64px;margin-bottom:24px}
+.perm-title{font-family:var(--display);font-size:26px;font-weight:700;color:var(--text);margin-bottom:10px}
+.perm-sub{font-family:var(--font);font-size:14px;color:var(--text2);line-height:1.6;margin-bottom:32px}
+.perm-btn{
+  padding:16px 40px;border-radius:50px;border:none;
+  background:linear-gradient(135deg,var(--accent2),var(--accent));
+  color:#000;font-family:var(--display);font-size:16px;font-weight:700;
+  cursor:pointer;letter-spacing:.5px;
+  box-shadow:0 0 30px rgba(0,255,229,.3);
+}
+.perm-note{margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--text2);letter-spacing:.5px}
+
+/* SCAN FLASH */
+.scan-flash{
+  position:fixed;inset:0;z-index:60;pointer-events:none;
+  background:rgba(0,255,229,.15);opacity:0;transition:opacity .1s;
+}
+.scan-flash.flash{opacity:1}
+
+/* SCAN FOUND indicator on reticle */
+.reticle.found .corner-piece{border-color:var(--ok);filter:drop-shadow(0 0 8px var(--ok))}
+.reticle.found .scan-beam{background:linear-gradient(90deg,transparent,var(--ok),var(--ok),transparent);box-shadow:0 0 10px var(--ok)}
+
+/* TECH LINES decoration */
+.tech-line-h,.tech-line-v{position:fixed;pointer-events:none;z-index:5;opacity:.06}
+.tech-line-h{height:1px;background:var(--accent);width:100%}
+.tech-line-v{width:1px;background:var(--accent);height:100%}
+</style>
+</head>
+<body>
+
+<!-- CAMERA -->
+<div id="camera-container">
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="scan-canvas"></canvas>
+</div>
+
+<!-- DECORATIVE TECH LINES -->
+<div class="tech-line-h" style="top:20%"></div>
+<div class="tech-line-h" style="top:80%"></div>
+<div class="tech-line-v" style="left:15%"></div>
+<div class="tech-line-v" style="right:15%"></div>
+
+<!-- SCAN FLASH -->
+<div class="scan-flash" id="scan-flash"></div>
+
+<!-- AR CONNECTOR -->
+<div class="ar-connector" id="ar-connector"></div>
+<div class="ar-dot" id="ar-dot"></div>
+
+<!-- AR BUBBLE -->
+<div id="ar-bubble">
+  <div class="ar-card">
+    <div class="ar-card-header">
+      <div class="ar-pkg-emoji" id="ar-emoji">📦</div>
+      <div>
+        <div class="ar-pkg-id" id="ar-id">PKG-000</div>
+        <div class="ar-pkg-name" id="ar-name">Cargando...</div>
+      </div>
+      <div class="ar-close" onclick="closeARBubble()">✕</div>
+    </div>
+    <div class="ar-status-row">
+      <div id="ar-priority-badge"></div>
+      <div id="ar-status-badge"></div>
+    </div>
+    <div class="ar-fields">
+      <div class="ar-field">
+        <div class="ar-field-label">Contenido</div>
+        <div class="ar-field-value" id="ar-type" style="font-size:12px">—</div>
+      </div>
+      <div class="ar-field">
+        <div class="ar-field-label">Peso</div>
+        <div class="ar-field-value" id="ar-weight">—</div>
+      </div>
+      <div class="ar-field">
+        <div class="ar-field-label">ETA</div>
+        <div class="ar-field-value" id="ar-eta" style="color:var(--warn)">—</div>
+      </div>
+      <div class="ar-field">
+        <div class="ar-field-label">Ruta</div>
+        <div class="ar-field-value" id="ar-route" style="font-size:12px">—</div>
+      </div>
+      <div class="ar-field full">
+        <div class="ar-field-label">Dirección</div>
+        <div class="ar-field-value" id="ar-addr" style="font-size:11px;line-height:1.4">—</div>
+      </div>
+    </div>
+    <div class="ar-actions">
+      <button class="ar-btn ar-btn-primary" onclick="openMapForCurrent()">🗺️ Ver ruta</button>
+      <button class="ar-btn ar-btn-secondary" onclick="openPackagesPanel()">📋 Lista</button>
+    </div>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+  <!-- TOP -->
+  <div class="hud-top">
+    <div class="app-logo">
+      <div class="logo-mark">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      </div>
+      <div>
+        <div class="app-title">LogiScan AR</div>
+        <div class="app-sub">COLIMA · MX</div>
+      </div>
+    </div>
+    <div class="hud-status"><div class="pulse-dot"></div><span id="cam-status">INICIANDO</span></div>
+  </div>
+
+  <!-- MIDDLE (reticle) -->
+  <div class="hud-mid">
+    <div class="reticle" id="reticle">
+      <div class="reticle-grid"></div>
+      <div class="corner-piece tl"></div>
+      <div class="corner-piece tr"></div>
+      <div class="corner-piece bl"></div>
+      <div class="corner-piece br"></div>
+      <div class="scan-beam"></div>
+      <div class="scan-hint" id="scan-hint">APUNTA AL CÓDIGO QR</div>
+    </div>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <div class="hud-bottom">
+    <div class="bottom-nav">
+      <div class="nav-item active" id="nav-scanner" onclick="setNav('scanner')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="4" height="4" rx=".5"/><rect x="20" y="14" width="1" height="4" rx=".5"/><rect x="14" y="20" width="7" height="1" rx=".5"/></svg>
+        ESCÁNER
+      </div>
+      <div class="nav-item" id="nav-packages" onclick="openPackagesPanel()">
+        <svg viewBox="0 0 24 24"><path d="M16.5 9.4l-9-5.19M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" fill="none" stroke="currentColor" stroke-width="2"/><polyline points="3.27 6.96 12 12.01 20.73 6.96" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="22.08" x2="12" y2="12" stroke="currentColor" stroke-width="2"/></svg>
+        PAQUETES
+      </div>
+      <div class="nav-item" id="nav-map" onclick="openMapPanel()">
+        <svg viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" fill="none" stroke="currentColor" stroke-width="2"/><line x1="8" y1="2" x2="8" y2="18" stroke="currentColor" stroke-width="2"/><line x1="16" y1="6" x2="16" y2="22" stroke="currentColor" stroke-width="2"/></svg>
+        MAPA
+      </div>
+      <div class="nav-item" id="nav-routes" onclick="openRoutesPanel()">
+        <svg viewBox="0 0 24 24"><circle cx="6" cy="19" r="3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="18" cy="5" r="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 16V7a6 6 0 006 6h3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+        RUTAS
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── PACKAGES PANEL ── -->
+<div class="panel" id="panel-packages">
+  <div class="panel-drag"></div>
+  <div class="panel-header">
+    <div class="panel-title">📦 Paquetes</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="pkg-count" style="font-family:var(--mono);font-size:11px;color:var(--accent);background:rgba(0,255,229,.1);border:1px solid var(--hud-border);padding:3px 10px;border-radius:20px"></span>
+      <div class="panel-close" onclick="closePanel('panel-packages')">✕</div>
+    </div>
+  </div>
+  <div class="panel-body">
+    <div class="filter-bar" id="filter-bar">
+      <div class="chip active" onclick="filterPkgs('todos',this)">Todos</div>
+      <div class="chip" onclick="filterPkgs('Alta',this)">🔴 Alta</div>
+      <div class="chip" onclick="filterPkgs('Media',this)">🟡 Media</div>
+      <div class="chip" onclick="filterPkgs('Baja',this)">🟢 Baja</div>
+      <div class="chip" onclick="filterPkgs('En tránsito',this)">🚚 Tránsito</div>
+      <div class="chip" onclick="filterPkgs('Pendiente',this)">⏳ Pendiente</div>
+      <div class="chip" onclick="filterPkgs('Entregado',this)">✅ Entregado</div>
+    </div>
+    <div class="pkg-list" id="pkg-list"></div>
+  </div>
+</div>
+
+<!-- ── MAP PANEL ── -->
+<div class="panel" id="panel-map">
+  <div class="panel-drag"></div>
+  <div class="panel-header">
+    <div class="panel-title">🗺️ Mapa de Colima</div>
+    <div class="panel-close" onclick="closePanel('panel-map')">✕</div>
+  </div>
+  <div class="panel-body" style="padding:0;position:relative">
+    <div id="map" style="height:100%"></div>
+    <div class="map-legend">
+      <div class="legend-row"><div class="legend-dot" style="background:#ff6060"></div>Alta prioridad</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--warn)"></div>Media prioridad</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--ok)"></div>Baja prioridad</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── ROUTES PANEL ── -->
+<div class="panel" id="panel-routes">
+  <div class="panel-drag"></div>
+  <div class="panel-header">
+    <div class="panel-title">🛣️ Rutas optimizadas</div>
+    <div class="panel-close" onclick="closePanel('panel-routes')">✕</div>
+  </div>
+  <div class="panel-body">
+    <div class="route-stats">
+      <div class="route-stat">
+        <div class="route-stat-val" id="r-stops">—</div>
+        <div class="route-stat-lbl">PARADAS</div>
+      </div>
+      <div class="route-stat">
+        <div class="route-stat-val" id="r-dist">—</div>
+        <div class="route-stat-lbl">DISTANCIA</div>
+      </div>
+      <div class="route-stat">
+        <div class="route-stat-val" id="r-time">—</div>
+        <div class="route-stat-lbl">TIEMPO EST.</div>
+      </div>
+    </div>
+    <button class="opt-btn" onclick="optimizeRoutes()">⚡ Optimizar ruta ahora</button>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--text2);letter-spacing:.8px;margin-bottom:12px">SECUENCIA DE ENTREGAS</div>
+    <div class="route-steps" id="route-steps"></div>
+  </div>
+</div>
+
+<!-- PERMISSION SCREEN -->
+<div id="perm-screen">
+  <div class="perm-icon">📷</div>
+  <div class="perm-title">Acceso a cámara</div>
+  <div class="perm-sub">LogiScan AR necesita acceso a tu cámara para detectar códigos QR y superponer información de paquetes en tiempo real.</div>
+  <button class="perm-btn" onclick="startCamera()">Activar cámara AR</button>
+  <div class="perm-note">Funciona mejor en Chrome para Android o Safari en iOS</div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════════
+// DATABASE
+// ════════════════════════════════════════════════
+const PACKAGES = {
+  'PKG-001':{id:'PKG-001',emoji:'💻',type:'Laptop y accesorios',weight:2.4,dim:'35×25×8cm',
+   address:'Av. Tecnológico 1234, Col. Centro, Colima',municipality:'Colima',
+   priority:'Alta',status:'En tránsito',cost:'$180',fragile:true,route:'Ruta Norte A',eta:'11:30 AM',lat:19.2452,lng:-103.7241,routeOrder:1},
+  'PKG-002':{id:'PKG-002',emoji:'💊',type:'Medicamentos refrigerados',weight:0.8,dim:'20×15×10cm',
+   address:'Calle Hidalgo 567, Col. Las Palmas, Colima',municipality:'Colima',
+   priority:'Alta',status:'Pendiente',cost:'$95',fragile:true,route:'Ruta Norte A',eta:'11:55 AM',lat:19.2431,lng:-103.7198,routeOrder:2},
+  'PKG-003':{id:'PKG-003',emoji:'🍱',type:'Caja de despensa familiar',weight:8.5,dim:'50×40×30cm',
+   address:'Blvd. Camino Real 890, Manzanillo',municipality:'Manzanillo',
+   priority:'Media',status:'En tránsito',cost:'$220',fragile:false,route:'Ruta Sur B',eta:'01:15 PM',lat:19.0528,lng:-104.3171,routeOrder:5},
+  'PKG-004':{id:'PKG-004',emoji:'👕',type:'Prendas de vestir',weight:3.2,dim:'40×30×20cm',
+   address:'Calle Morelos 234, Tecomán',municipality:'Tecomán',
+   priority:'Baja',status:'Pendiente',cost:'$145',fragile:false,route:'Ruta Sur B',eta:'02:40 PM',lat:18.9003,lng:-103.8771,routeOrder:7},
+  'PKG-005':{id:'PKG-005',emoji:'📄',type:'Contratos y papelería urgente',weight:0.5,dim:'35×25×5cm',
+   address:'Av. Universidad 456, Col. Jardines, Colima',municipality:'Colima',
+   priority:'Alta',status:'En tránsito',cost:'$65',fragile:false,route:'Ruta Centro C',eta:'10:45 AM',lat:19.2401,lng:-103.7261,routeOrder:3},
+  'PKG-006':{id:'PKG-006',emoji:'🔧',type:'Equipo eléctrico industrial',weight:12.0,dim:'60×40×35cm',
+   address:'Parque Industrial Norte, Cuauhtémoc',municipality:'Cuauhtémoc',
+   priority:'Media',status:'Entregado',cost:'$310',fragile:false,route:'Ruta Norte A',eta:'09:30 AM',lat:19.1608,lng:-103.6851,routeOrder:4},
+  'PKG-007':{id:'PKG-007',emoji:'🎨',type:'Cuadros y marcos de arte',weight:4.7,dim:'80×60×10cm',
+   address:'Plaza Central 123, Villa de Álvarez',municipality:'Villa de Álvarez',
+   priority:'Media',status:'En tránsito',cost:'$175',fragile:true,route:'Ruta Centro C',eta:'12:30 PM',lat:19.2720,lng:-103.7380,routeOrder:6},
+  'PKG-008':{id:'PKG-008',emoji:'🐾',type:'Alimento y accesorios mascotas',weight:6.3,dim:'45×35×25cm',
+   address:'Fracc. Las Huertas 789, Coquimatlán',municipality:'Coquimatlán',
+   priority:'Baja',status:'Pendiente',cost:'$155',fragile:false,route:'Ruta Sur B',eta:'03:10 PM',lat:19.2010,lng:-103.8020,routeOrder:8},
+  'PKG-009':{id:'PKG-009',emoji:'🧸',type:'Juguetes didácticos',weight:2.1,dim:'30×25×20cm',
+   address:'Calle Revolución 445, Armería',municipality:'Armería',
+   priority:'Baja',status:'Pendiente',cost:'$120',fragile:false,route:'Ruta Sur B',eta:'03:50 PM',lat:18.9271,lng:-103.9700,routeOrder:9},
+  'PKG-010':{id:'PKG-010',emoji:'🧳',type:'Maleta de viaje',weight:15.0,dim:'70×50×30cm',
+   address:'Aeropuerto Internacional de Colima',municipality:'Colima',
+   priority:'Alta',status:'En tránsito',cost:'$280',fragile:false,route:'Ruta Norte A',eta:'12:00 PM',lat:19.2777,lng:-103.5773,routeOrder:10},
+  'PKG-011':{id:'PKG-011',emoji:'🧃',type:'Productos líquidos envasados',weight:9.8,dim:'40×40×30cm',
+   address:'Mercado Central, Ixtlahuacán',municipality:'Ixtlahuacán',
+   priority:'Media',status:'Pendiente',cost:'$190',fragile:true,route:'Ruta Centro C',eta:'01:45 PM',lat:19.1940,lng:-103.6850,routeOrder:11},
+  'PKG-012':{id:'PKG-012',emoji:'⚽',type:'Equipamiento deportivo',weight:5.5,dim:'55×45×25cm',
+   address:'UNIMARCA Estadio, Colima',municipality:'Colima',
+   priority:'Baja',status:'Entregado',cost:'$200',fragile:false,route:'Ruta Centro C',eta:'09:15 AM',lat:19.2488,lng:-103.7312,routeOrder:12},
+};
+
+// ════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════
+let video, canvas, ctx, stream;
+let scanning = false;
+let lastScan = '';
+let lastScanTime = 0;
+let map = null, mapInited = false;
+let optimizedRoute = [];
+let currentARPkg = null;
+let activeFilter = 'todos';
+let rafId = null;
+
+// ════════════════════════════════════════════════
+// CAMERA INIT
+// ════════════════════════════════════════════════
+async function startCamera() {
+  document.getElementById('perm-screen').style.display = 'none';
+  video = document.getElementById('video');
+  canvas = document.getElementById('scan-canvas');
+  ctx = canvas.getContext('2d', {willReadFrequently: true});
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:{ideal:'environment'},
+        width:{ideal:1280},
+        height:{ideal:720}
+      },
+      audio:false
+    });
+    video.srcObject = stream;
+    video.play();
+    video.addEventListener('loadedmetadata', ()=>{
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      scanning = true;
+      document.getElementById('cam-status').textContent = 'AR ACTIVO';
+      showToast('✅ Cámara AR activada — apunta al QR');
+      requestAnimationFrame(scanLoop);
+    });
+  } catch(e) {
+    document.getElementById('cam-status').textContent = 'SIN CÁMARA';
+    showToast('⚠️ Sin acceso a cámara — modo demo');
+    document.getElementById('scan-hint').textContent = 'USA EL MODO DEMO ↓';
+    // Show demo mode fallback
+    showDemoFallback();
+  }
+}
+
+// ════════════════════════════════════════════════
+// QR SCAN LOOP
+// ════════════════════════════════════════════════
+function scanLoop() {
+  if(!scanning) return;
+  rafId = requestAnimationFrame(scanLoop);
+
+  if(video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+  // Resize canvas to match video
+  if(canvas.width !== video.videoWidth) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  try {
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts:'dontInvert'
+    });
+
+    if(code) {
+      const now = Date.now();
+      const data = code.data.trim();
+
+      // Show found state on reticle
+      document.getElementById('reticle').classList.add('found');
+      document.getElementById('scan-hint').textContent = '✓ QR DETECTADO';
+
+      // Debounce — only process same code every 3s
+      if(data !== lastScan || now - lastScanTime > 3000) {
+        lastScan = data;
+        lastScanTime = now;
+        onQRDetected(data, code.location);
+      } else if(currentARPkg && code.location) {
+        // Update bubble position continuously
+        updateARBubblePosition(code.location);
+      }
+    } else {
+      document.getElementById('reticle').classList.remove('found');
+      document.getElementById('scan-hint').textContent = 'APUNTA AL CÓDIGO QR';
+    }
+  } catch(e) {}
+}
+
+// ════════════════════════════════════════════════
+// QR DETECTED
+// ════════════════════════════════════════════════
+function onQRDetected(data, location) {
+  // Check if it's a package ID directly or embedded JSON
+  let pkgId = data;
+  try {
+    const parsed = JSON.parse(data);
+    pkgId = parsed.id || parsed.pkgId || data;
+  } catch(e) {}
+
+  const pkg = PACKAGES[pkgId];
+  if(!pkg) {
+    showToast('⚠️ QR no reconocido: ' + pkgId.substring(0,20));
+    return;
+  }
+
+  // Flash effect
+  const flash = document.getElementById('scan-flash');
+  flash.classList.add('flash');
+  setTimeout(()=>flash.classList.remove('flash'), 150);
+
+  showToast('📦 Escaneado: ' + pkg.id + ' · ' + pkg.type.substring(0,18));
+  currentARPkg = pkg;
+  showARBubble(pkg, location);
+}
+
+// ════════════════════════════════════════════════
+// AR BUBBLE POSITION
+// ════════════════════════════════════════════════
+function showARBubble(pkg, location) {
+  // Populate data
+  document.getElementById('ar-emoji').textContent = pkg.emoji;
+  document.getElementById('ar-id').textContent = pkg.id;
+  document.getElementById('ar-name').textContent = pkg.type;
+  document.getElementById('ar-type').textContent = pkg.type;
+  document.getElementById('ar-weight').textContent = pkg.weight + ' kg';
+  document.getElementById('ar-eta').textContent = pkg.eta;
+  document.getElementById('ar-route').textContent = pkg.route;
+  document.getElementById('ar-addr').textContent = pkg.address;
+
+  const pc = pkg.priority.toLowerCase();
+  const prMap = {alta:'pr-alta',media:'pr-media',baja:'pr-baja'};
+  document.getElementById('ar-priority-badge').innerHTML = `<div class="ar-priority ${prMap[pc]}">${pkg.priority.toUpperCase()}</div>`;
+
+  const sc = pkg.status==='En tránsito'?'st-transit':pkg.status==='Entregado'?'st-delivered':'st-pending';
+  document.getElementById('ar-status-badge').innerHTML = `<div class="ar-status ${sc}">${pkg.status}</div>`;
+
+  if(location) updateARBubblePosition(location);
+  else {
+    // Center fallback
+    const bubble = document.getElementById('ar-bubble');
+    bubble.style.left = '16px';
+    bubble.style.top = '120px';
+    bubble.style.right = '16px';
+    bubble.style.maxWidth = 'calc(100vw - 32px)';
+  }
+
+  document.getElementById('ar-bubble').classList.add('visible');
+}
+
+function updateARBubblePosition(location) {
+  if(!location || !canvas.width) return;
+  const bubble = document.getElementById('ar-bubble');
+  const dot = document.getElementById('ar-dot');
+
+  // QR center in video coordinates
+  const qrCX = (location.topLeftCorner.x + location.bottomRightCorner.x) / 2;
+  const qrCY = (location.topLeftCorner.y + location.bottomRightCorner.y) / 2;
+
+  // Scale to screen
+  const scaleX = window.innerWidth / canvas.width;
+  const scaleY = window.innerHeight / canvas.height;
+  const screenX = qrCX * scaleX;
+  const screenY = qrCY * scaleY;
+
+  // Place dot at QR center
+  dot.style.left = screenX + 'px';
+  dot.style.top = screenY + 'px';
+  dot.classList.add('visible');
+
+  // Place bubble above QR, clamped to screen
+  const bw = Math.min(280, window.innerWidth - 32);
+  let bx = screenX - bw / 2;
+  bx = Math.max(16, Math.min(window.innerWidth - bw - 16, bx));
+
+  let by = screenY - 280; // above QR
+  if(by < 90) by = screenY + 60; // flip below if too high
+
+  bubble.style.left = bx + 'px';
+  bubble.style.top = by + 'px';
+  bubble.style.right = 'auto';
+  bubble.style.maxWidth = bw + 'px';
+
+  // Draw connector line
+  const connector = document.getElementById('ar-connector');
+  const bRect = {x:bx + bw/2, y:by + (by < screenY ? 260 : 0)};
+  const dx = screenX - bRect.x;
+  const dy = screenY - bRect.y;
+  const len = Math.sqrt(dx*dx + dy*dy);
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+  connector.style.width = len + 'px';
+  connector.style.height = '1.5px';
+  connector.style.left = bRect.x + 'px';
+  connector.style.top = bRect.y + 'px';
+  connector.style.transform = `rotate(${angle}deg)`;
+  connector.style.transformOrigin = '0 50%';
+  connector.style.background = 'linear-gradient(90deg,var(--accent),transparent)';
+  connector.classList.add('visible');
+}
+
+function closeARBubble() {
+  document.getElementById('ar-bubble').classList.remove('visible');
+  document.getElementById('ar-connector').classList.remove('visible');
+  document.getElementById('ar-dot').classList.remove('visible');
+  currentARPkg = null;
+  lastScan = '';
+}
+
+// ════════════════════════════════════════════════
+// DEMO FALLBACK (when no camera)
+// ════════════════════════════════════════════════
+function showDemoFallback() {
+  const mid = document.querySelector('.hud-mid');
+  mid.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:20px">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text2);letter-spacing:1px;margin-bottom:4px">MODO DEMO — Sin cámara</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;width:100%">
+        ${Object.values(PACKAGES).slice(0,8).map(p=>`
+          <div onclick="demoScan('${p.id}')" style="
+            background:rgba(0,40,80,.7);border:1px solid var(--border);border-radius:10px;
+            padding:10px 6px;text-align:center;cursor:pointer;transition:all .2s;
+            display:flex;flex-direction:column;align-items:center;gap:4px;
+          ">
+            <div style="font-size:20px">${p.emoji}</div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--accent)">${p.id}</div>
+            <div class="badge ${p.priority.toLowerCase()}" style="font-size:8px;padding:1px 5px">${p.priority}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text2);text-align:center;margin-top:4px">
+        Toca un paquete para simular escaneo AR
+      </div>
+    </div>`;
+}
+
+function demoScan(id) {
+  const pkg = PACKAGES[id];
+  if(!pkg) return;
+  const flash = document.getElementById('scan-flash');
+  flash.classList.add('flash');
+  setTimeout(()=>flash.classList.remove('flash'), 150);
+  lastScan = id;
+  lastScanTime = Date.now();
+  currentARPkg = pkg;
+  showToast('📦 Simulando escaneo: ' + pkg.id);
+
+  // Show bubble centered (no camera location)
+  showARBubble(pkg, null);
+  const bubble = document.getElementById('ar-bubble');
+  bubble.style.left = '16px';
+  bubble.style.top = '100px';
+  bubble.style.right = '16px';
+  bubble.style.maxWidth = 'calc(100% - 32px)';
+  document.getElementById('ar-connector').classList.remove('visible');
+  document.getElementById('ar-dot').classList.remove('visible');
+}
+
+// ════════════════════════════════════════════════
+// PANELS
+// ════════════════════════════════════════════════
+function openPackagesPanel() {
+  setNav('packages');
+  renderPackageList();
+  document.getElementById('panel-packages').classList.add('open');
+}
+function openMapPanel() {
+  setNav('map');
+  document.getElementById('panel-map').classList.add('open');
+  setTimeout(()=>{
+    if(!mapInited) initMap();
+    else if(map) map.invalidateSize();
+  }, 200);
+}
+function openRoutesPanel() {
+  setNav('routes');
+  buildRoute(Object.values(PACKAGES));
+  document.getElementById('panel-routes').classList.add('open');
+}
+function closePanel(id) {
+  document.getElementById(id).classList.remove('open');
+  setNav('scanner');
+}
+function setNav(v) {
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('nav-'+v)?.classList.add('active');
+}
+function openMapForCurrent() {
+  if(currentARPkg) {
+    const pkg = currentARPkg;
+    openMapPanel();
+    setTimeout(()=>{
+      if(map) map.setView([pkg.lat, pkg.lng], 14);
+    }, 500);
+  } else {
+    openMapPanel();
+  }
+}
+
+// ════════════════════════════════════════════════
+// PACKAGES LIST
+// ════════════════════════════════════════════════
+function renderPackageList() {
+  const f = activeFilter;
+  let pkgs = Object.values(PACKAGES);
+  if(['Alta','Media','Baja'].includes(f)) pkgs = pkgs.filter(p=>p.priority===f);
+  else if(['En tránsito','Pendiente','Entregado'].includes(f)) pkgs = pkgs.filter(p=>p.status===f);
+
+  document.getElementById('pkg-count').textContent = pkgs.length + ' paquetes';
+
+  document.getElementById('pkg-list').innerHTML = pkgs.map(p=>{
+    const sc = p.status==='En tránsito'?'transit':p.status==='Entregado'?'delivered':'pending';
+    return `
+    <div class="pkg-card ${p.priority.toLowerCase()}" onclick="quickARFromList('${p.id}')">
+      <div class="pkg-icon-wrap">${p.emoji}</div>
+      <div class="pkg-info">
+        <div class="pkg-id">${p.id} · ${p.route}</div>
+        <div class="pkg-name">${p.type}</div>
+        <div class="pkg-addr">📍 ${p.address}</div>
+        <div class="pkg-tags">
+          <div class="badge ${p.priority.toLowerCase()}">${p.priority}</div>
+          <div class="badge ${sc}">${p.status}</div>
+          <div class="badge" style="background:rgba(255,255,255,.05);color:var(--text2);border:1px solid var(--border)">${p.weight}kg</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function quickARFromList(id) {
+  const pkg = PACKAGES[id];
+  if(!pkg) return;
+  closePanel('panel-packages');
+  currentARPkg = pkg;
+  showARBubble(pkg, null);
+  const bubble = document.getElementById('ar-bubble');
+  bubble.style.left = '16px';
+  bubble.style.top = '100px';
+  bubble.style.right = '16px';
+  bubble.style.maxWidth = 'calc(100% - 32px)';
+  document.getElementById('ar-connector').classList.remove('visible');
+  document.getElementById('ar-dot').classList.remove('visible');
+  showToast('AR: ' + pkg.id + ' · ' + pkg.type.substring(0,20));
+}
+
+function filterPkgs(f, el) {
+  activeFilter = f;
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  renderPackageList();
+}
+
+// ════════════════════════════════════════════════
+// MAP
+// ════════════════════════════════════════════════
+function initMap() {
+  mapInited = true;
+  map = L.map('map',{center:[19.15,-103.9],zoom:9,zoomControl:true,attributionControl:false});
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+  const routeCoords = Object.values(PACKAGES).sort((a,b)=>a.routeOrder-b.routeOrder).map(p=>[p.lat,p.lng]);
+  L.polyline(routeCoords,{color:'#00ffe5',weight:2,opacity:.6,dashArray:'8 5'}).addTo(map);
+
+  Object.values(PACKAGES).forEach(pkg=>{
+    const color = pkg.priority==='Alta'?'#ff6060':pkg.priority==='Media'?'#ffb800':'#00e57a';
+    const icon = L.divIcon({
+      className:'',
+      html:`<div style="width:36px;height:36px;background:${color};border:2.5px solid rgba(255,255,255,.9);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.5)">${pkg.emoji}</div>`,
+      iconSize:[36,36],iconAnchor:[18,18]
+    });
+    L.marker([pkg.lat,pkg.lng],{icon}).addTo(map)
+      .bindPopup(`<div style="font-family:system-ui;min-width:180px;padding:4px">
+        <strong style="font-size:13px">${pkg.id} ${pkg.emoji}</strong><br>
+        <span style="font-size:11px;color:#666">${pkg.type}</span><br><br>
+        📍 <span style="font-size:11px">${pkg.address}</span><br><br>
+        <span style="background:${color}22;color:${color};border:1px solid ${color}55;border-radius:8px;padding:2px 8px;font-size:11px;font-weight:700">${pkg.priority}</span>
+        &nbsp;<span style="font-size:11px">⏰ ${pkg.eta}</span>
+      </div>`);
+  });
+}
+
+// ════════════════════════════════════════════════
+// ROUTE OPTIMIZATION (Haversine + Priority)
+// ════════════════════════════════════════════════
+function haversine(lat1,lng1,lat2,lng2) {
+  const R=6371, dLat=(lat2-lat1)*Math.PI/180, dLng=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+function optimizeRoutes() {
+  showToast('⚡ Calculando ruta óptima...');
+  setTimeout(()=>{
+    const depot={lat:19.2452,lng:-103.7241};
+    const pScore={Alta:0,Media:1,Baja:2};
+    const pending = Object.values(PACKAGES).filter(p=>p.status!=='Entregado');
+    pending.sort((a,b)=>{
+      const d=pScore[a.priority]-pScore[b.priority];
+      if(d!==0) return d;
+      return haversine(depot.lat,depot.lng,a.lat,a.lng)-haversine(depot.lat,depot.lng,b.lat,b.lng);
+    });
+    const delivered = Object.values(PACKAGES).filter(p=>p.status==='Entregado');
+    optimizedRoute=[...pending,...delivered];
+    buildRoute(optimizedRoute);
+    showToast('✅ Ruta óptima: '+pending.length+' entregas pendientes');
+  }, 600);
+}
+
+function buildRoute(pkgs) {
+  const route = pkgs || Object.values(PACKAGES);
+  const depot={lat:19.2452,lng:-103.7241};
+  let dist = route.length>0 ? haversine(depot.lat,depot.lng,route[0].lat,route[0].lng) : 0;
+  for(let i=0;i<route.length-1;i++) dist+=haversine(route[i].lat,route[i].lng,route[i+1].lat,route[i+1].lng);
+  const mins=Math.round(dist/45*60);
+
+  document.getElementById('r-stops').textContent=route.length;
+  document.getElementById('r-dist').textContent=Math.round(dist)+'km';
+  document.getElementById('r-time').textContent=mins>=60?Math.floor(mins/60)+'h'+mins%60+'m':mins+'m';
+
+  document.getElementById('route-steps').innerHTML=route.map((p,i)=>{
+    const color=p.priority==='Alta'?'#ff6060':p.priority==='Media'?'#ffb800':'#00e57a';
+    const dist2=i>0?Math.round(haversine(route[i-1].lat,route[i-1].lng,p.lat,p.lng)*10)/10+'km':'Inicio';
+    const sc=p.status==='En tránsito'?'transit':p.status==='Entregado'?'delivered':'pending';
+    return `
+    <div class="route-step" onclick="quickARFromRoute('${p.id}')">
+      <div class="step-num" style="border-color:${color};color:${color}">${i+1}</div>
+      <div class="step-info">
+        <div class="step-name">${p.emoji} ${p.type} <div class="badge ${sc}" style="font-size:9px">${p.status}</div></div>
+        <div class="step-meta">
+          <span>📍 ${p.municipality}</span>
+          <span>📏 ${dist2}</span>
+          <span>⏰ ${p.eta}</span>
+          <span class="badge ${p.priority.toLowerCase()}" style="font-size:9px">${p.priority}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function quickARFromRoute(id) {
+  const pkg = PACKAGES[id];
+  if(!pkg) return;
+  closePanel('panel-routes');
+  quickARFromList(id);
+}
+
+// ════════════════════════════════════════════════
+// TOAST
+// ════════════════════════════════════════════════
+function showToast(msg) {
+  const t=document.getElementById('toast');
+  t.textContent=msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer=setTimeout(()=>t.classList.remove('show'),2800);
+}
+
+// ════════════════════════════════════════════════
+// INIT ON LOAD
+// ════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded',()=>{
+  // Check for camera support
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    document.getElementById('perm-screen').style.display='none';
+    showDemoFallback();
+    document.getElementById('cam-status').textContent='MODO DEMO';
+    return;
+  }
+  // Auto-start on desktop (camera permission)
+  // On mobile, user must tap button first
+  const isMobile=/Mobi|Android/i.test(navigator.userAgent);
+  if(!isMobile) {
+    // On desktop offer demo immediately too
+    document.getElementById('perm-screen').innerHTML = `
+      <div class="perm-icon">📦</div>
+      <div class="perm-title">LogiScan AR · Colima</div>
+      <div class="perm-sub">Sistema de gestión logística con Realidad Aumentada para escaneo de paquetes en tiempo real.</div>
+      <button class="perm-btn" onclick="startCamera()" style="margin-bottom:12px">📷 Activar cámara AR</button>
+      <button onclick="demoMode()" style="padding:12px 32px;border-radius:50px;border:1px solid var(--hud-border);background:transparent;color:var(--accent);font-family:var(--display);font-size:14px;font-weight:600;cursor:pointer">Ver en modo demo</button>
+      <div class="perm-note" style="margin-top:16px">En móvil: la RA se superpone sobre los QR en tiempo real</div>
+    `;
+  }
+});
+
+function demoMode() {
+  document.getElementById('perm-screen').style.display='none';
+  document.getElementById('cam-status').textContent='MODO DEMO';
+  showDemoFallback();
+  showToast('🎮 Modo demo activado — toca un paquete');
+}
+</script>
+</body>
+</html>
